@@ -1,0 +1,197 @@
+---
+title: "Régression des prix des logements AirBnB"
+author: "MATT Lucie"
+output: revealjs::revealjs_presentation
+css: "style.css"
+---
+
+## Présentation de la base de données
+
+-   Prix des logements AirBnb à Amsterdam, étude de 2021 par l'Université de Varsovie
+-   Combinaison de 2 bases de données
+-   Discrétisation des variables room_type, room_shared, host_is_a_superhost et création de la variable weekend
+-   Variables sélectionnées : realSum,person_capacity, private,shared, superhost,multi,biz,cleanliness_rating, guest_satisfaction_overall,bedrooms, dist, metro_dist, weekend
+
+```{r data, echo = TRUE, tidy.opts=list(width.cutoff=40)}
+weekend_data <- read.csv("amsterdam_weekends.csv", stringsAsFactors = FALSE)
+week_data <- read.csv("amsterdam_weekdays.csv", stringsAsFactors = FALSE)
+
+weekend_data$weekend <- 1
+week_data$weekend <- 0
+
+combined_data <- rbind(weekend_data, week_data)
+
+write.csv(combined_data, "locations_combined.csv", row.names = FALSE)
+```
+
+## Présentation de la base de données
+
+```{r data2, echo=TRUE, tidy.opts=list(width.cutoff=40)}
+combined_data$private <- ifelse(combined_data$room_type == "Private room", 1, 0)
+combined_data$shared <- ifelse(combined_data$room_shared == "True", 1, 0)
+combined_data$superhost <- ifelse(combined_data$host_is_superhost == "True", 1, 0)
+
+airbnb.data <- combined_data[, c("realSum","person_capacity", "private",   "shared", 
+                                   "superhost", 
+                                   "multi", 
+                                   "biz", 
+                                   "cleanliness_rating", 
+                                   "guest_satisfaction_overall", 
+                                   "bedrooms", 
+                                   "dist", 
+                                   "metro_dist", 
+                                   "weekend")]
+```
+                     
+                                  
+## Valeurs manquantes                                
+
+```{r, echo=TRUE, tidy.opts=list(width.cutoff=40)}
+any(is.na(airbnb.data))
+```
+                                  
+
+
+
+
+
+## Essai d'un premier modèle
+
+```{r message=FALSE, warning=FALSE}
+
+modele1<- lm(realSum~person_capacity+private+shared+superhost+multi+biz+cleanliness_rating+guest_satisfaction_overall+bedrooms+dist+metro_dist+weekend, data=airbnb.data)
+summary(modele1)
+```
+
+## Essai d'un premier modèle
+
+```{r resettest, message=FALSE, warning=FALSE}
+
+library(lmtest)
+reset_test1 <- resettest(modele1, power = 2:3, type = "fitted")
+print(reset_test1)
+```
+
+La p-value est faible (\<0.05), le modèle n'est pas correctement spécifié.
+
+## Matrice de corrélation
+
+```{r, echo=FALSE, tidy.opts=list(width.cutoff=40)}
+correlation_matrix <- cor(airbnb.data)
+print(correlation_matrix)
+```
+
+Je réessaye des modèles en transformant les variables, ajoutant des termes quadratiques ainsi que des interactions, jusqu'à obtenir un modèle avec un coefficient de détermination élevé et significatif.
+
+## Le modèle de référence
+
+```{r modele6, echo = FALSE, tidy.opts=list(width.cutoff=40)}
+airbnb.data$log_realSum <- log(airbnb.data$realSum + 1)
+airbnb.data$log_weekend <- log(airbnb.data$weekend + 1)
+modele6<-lm(log_realSum~private*bedrooms+log_weekend+dist, data=airbnb.data)
+summary(modele6)
+```
+
+
+## Variables sélectionnées
+
+```{r table1, echo=FALSE, message=FALSE, warning=FALSE}
+library(table1)
+ table1(~realSum+private+bedrooms+dist|weekend, data=airbnb.data)
+```
+
+## Espérance des termes d'erreur
+
+```{r residualsmodele6, echo = FALSE, tidy.opts=list(width.cutoff=40)}
+plot(residuals(modele6))
+```
+
+## Test de l'hétéroscédasticité
+
+Le test de Breusch-Pagan
+
+```{r bptest, echo = FALSE, tidy.opts=list(width.cutoff=40)}
+bptest(modele6)
+```
+
+## Introduction de termes d'erreur robustes
+
+```{r robuste6, echo = TRUE, tidy.opts=list(width.cutoff=40)}
+library(MASS)
+robuste6 <- rlm(log_realSum~private*bedrooms+log_weekend+dist, data=airbnb.data)
+summary(robuste6)
+
+```
+
+## Vérification de la matrice de corrélation
+
+```{r corr2, echo=FALSE, tidy.opts=list(width.cutoff=40)}
+selected.data<- combined_data[, c("realSum","private",
+                                   "bedrooms", 
+                                   "dist", 
+                                   "weekend")]
+
+correlation6 <- cor(selected.data)
+print(correlation6)
+```
+## Test de Durbin-Watson : autocorrélation des termes d'erreur
+```{r dwtest, echo = FALSE, tidy.opts=list(width.cutoff=40)}
+dwtest(robuste6)
+```
+## Le modèle final
+```{r graphe, echo = FALSE, tidy.opts=list(width.cutoff=40)}
+airbnb.data$valeurs_ajustees <- robuste6$fitted.values
+
+library(ggplot2)
+
+ggplot(airbnb.data, aes(x = log_realSum, y = valeurs_ajustees)) +
+  geom_point(color = "blue", alpha = 0.5) +  # Points des données
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +  # Ligne d'égalité
+  labs(title = "Valeurs Observées vs Valeurs Ajustées",
+       x = "Valeurs Observées",
+       y = "Valeurs Ajustées") +
+  theme_minimal()
+```
+
+## Les coefficients
+
+```{r graphe2, echo=FALSE, message=FALSE, warning=FALSE}
+coefficients_model <- coef(robuste6)
+coefficients_df <- data.frame(
+  variable = names(coefficients_model), 
+  estimate = coefficients_model)
+
+library(ggplot2)
+ggplot(coefficients_df, aes(x = reorder(variable, estimate), y = estimate)) +
+  geom_bar(stat = "identity", fill = "skyblue") + 
+  coord_flip() +  
+  scale_y_continuous(limits = c(-1, 1)) + 
+  labs(
+    title = "Diagramme des coefficients du modèle robuste6",
+    x = "Variables",
+    y = "Estimation des coefficients"
+  ) +
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title = element_text(size = 12))
+```
+
+## Indépendance des résidus
+
+```{r graphe3, echo = FALSE, tidy.opts=list(width.cutoff=40)}
+airbnb.data$residus <- residuals(robuste6)
+airbnb.data$valeurs_ajustees <- predict(robuste6)
+
+# Créer le graphique des résidus vs valeurs ajustées
+ggplot(airbnb.data, aes(x = valeurs_ajustees, y = residus)) +
+  geom_point(alpha = 0.6, color = "blue") +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "Graphique des Résidus vs Valeurs Ajustées", 
+       x = "Valeurs Ajustées", 
+       y = "Résidus") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 12),  # Titre
+        axis.text = element_text(size = 10),  # Taille des étiquettes des axes
+        axis.title = element_text(size = 12))
+```
+
